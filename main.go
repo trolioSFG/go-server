@@ -76,9 +76,10 @@ func (c *apiConfig) reset(w http.ResponseWriter, req *http.Request) {
 	w.Write([]byte(fmt.Sprintf(`{"deleted":"%v"}`, num)))
 }
 
-func validate(w http.ResponseWriter, req *http.Request) {
+func (c *apiConfig) createChirp(w http.ResponseWriter, req *http.Request) {
 	type Petition struct {
 		Body string `json:"body"`
+		UserID uuid.UUID `json:"user_id"`
 	}
 
 	pet := Petition{}
@@ -92,7 +93,7 @@ func validate(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	log.Printf("Len(pet.Body) %d\n", len(pet.Body))
+	log.Printf("New chirp Len(pet.Body) %d\n", len(pet.Body))
 
 	if len(pet.Body) > 140 {
 		w.Header().Add("Content-Type", "application/json")
@@ -113,12 +114,46 @@ func validate(w http.ResponseWriter, req *http.Request) {
 	}
 
 	clean = strings.TrimSpace(clean)
+	chirp := database.CreateChirpParams {
+		Body: clean,
+		UserID: pet.UserID,
+	}
 
-			
+	created, err := c.dbq.CreateChirp(req.Context(), chirp)
+	if err != nil {
+		w.Header().Add("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(fmt.Sprintf(`{"error":"%v"}`, err)))
+		return
+	}
+
+	type cchirp struct {
+		ID uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Body string `json:"body"`
+		UserID uuid.UUID `json:"user_id"`
+	}
+	data := cchirp {
+		ID: created.ID,
+		CreatedAt: created.CreatedAt,
+		UpdatedAt: created.UpdatedAt,
+		Body: created.Body,
+		UserID: created.UserID,
+	}
+	jData, err := json.Marshal(&data)
+	if err != nil {
+		w.Header().Add("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(fmt.Sprintf(`{"error":"%v"}`, err)))
+		return
+	}
+	
+
 	// No "body" in req json means valid ?!
 	w.Header().Add("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"cleaned_body":"` + clean + `"}`))
+	w.WriteHeader(http.StatusCreated)
+	w.Write(jData)
 }
 
 
@@ -193,7 +228,7 @@ func main() {
 
 	srv := http.NewServeMux()
 	srv.HandleFunc("GET /api/healthz", ready)
-	srv.HandleFunc("POST /api/validate_chirp", validate)
+	srv.HandleFunc("POST /api/chirps", cfg.createChirp)
 	srv.HandleFunc("POST /api/users", cfg.createUser)
 
 	srv.HandleFunc("GET /admin/metrics", cfg.getHits)
