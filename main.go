@@ -16,7 +16,7 @@ import (
 	"time"
 	"github.com/google/uuid"
 	"github.com/trolioSFG/go-server/internal/auth"
-	"strconv"
+//	"strconv"
 )
 
 
@@ -259,7 +259,6 @@ func (c *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 	type userReq struct {
 		Email string `json:"email"`
 		Password string `json:"password"`
-		ExpiresInSeconds int `json:"expires_in_seconds"`
 	}
 
 	data := userReq{}
@@ -268,9 +267,12 @@ func (c *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 		responseWithError(w, http.StatusBadRequest, err)
 		return
 	}
+
+	/**
 	if data.ExpiresInSeconds == 0 || data.ExpiresInSeconds > 3600 {
 		data.ExpiresInSeconds = 3600
 	}
+	**/
 
 	dbUser, err := c.dbq.GetUserByEmail(r.Context(), data.Email)
 	if err != nil {
@@ -284,7 +286,7 @@ func (c *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	duration, err := time.ParseDuration(strconv.Itoa(data.ExpiresInSeconds) + "s")
+	duration, err := time.ParseDuration("1h")
 	if err != nil {
 		responseWithError(w, http.StatusInternalServerError, err)
 		return
@@ -296,10 +298,24 @@ func (c *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	refToken, _ := auth.MakeRefreshToken()
+
+	p := database.SaveRefreshTokenParams {
+		Token: refToken,
+		UserID: dbUser.ID,
+	}
+	err = c.dbq.SaveRefreshToken(r.Context(), p)
+	if err != nil {
+		responseWithError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+
 	w.Header().Add("Contenty-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(fmt.Sprintf(`{"id":"%v","created_at":"%v","updated_at":"%v","email":"%v","token":"%v"}`,
-		dbUser.ID, dbUser.CreatedAt, dbUser.UpdatedAt, dbUser.Email, token)))
+	w.Write([]byte(fmt.Sprintf(
+		`{"id":"%v","created_at":"%v","updated_at":"%v","email":"%v","token":"%v","refresh_token":"%v"}`,
+		dbUser.ID, dbUser.CreatedAt, dbUser.UpdatedAt, dbUser.Email, token, refToken)))
 }
 
 
@@ -382,6 +398,71 @@ func (c *apiConfig) getChirp(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
+func (c *apiConfig) refresh(w http.ResponseWriter, r *http.Request) {
+	rtoken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		responseWithError(w, http.StatusUnauthorized, err)
+		return
+	}
+
+	data, err := c.dbq.GetRefreshToken(r.Context(), rtoken)
+	if err != nil {
+		responseWithError(w, http.StatusUnauthorized, err)
+		return
+	}
+
+	fmt.Printf("Refresh token:\n%+v\n", data)
+
+	if data.RevokedAt.Valid || time.Now().After(data.ExpiresAt) {
+		responseWithError(w, http.StatusUnauthorized, fmt.Errorf("Expired refresh token"))
+		return
+	}
+
+	/**
+	userID, err := c.dqb.GetUserIDFromRefreshToken(r.Context(), rtoken)
+	if err != nil {
+		responseWithError(w, http.StatusUnauthorized, err)
+		return
+	}
+	**/
+
+	duration, _ := time.ParseDuration("1h")
+	token, err := auth.MakeJWT(data.UserID, c.secret, duration)
+	if err != nil {
+		responseWithError(w, http.StatusUnauthorized, err)
+		return
+	}
+
+	w.Header().Add("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(fmt.Sprintf(`{"token":"%v"}`, token)))
+}
+
+func (c *apiConfig) revoke(w http.ResponseWriter, r *http.Request) {
+	rtoken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		responseWithError(w, http.StatusUnauthorized, err)
+		return
+	}
+
+	/** Is it necesary to check si exists token ?
+	_, err := c.dbq.GetRefreshToken(r.Context(), rtoken)
+	if err != nil {
+		responseWithError(w, http.StatusUnauthorized, err)
+		return
+	}
+	***/
+
+	err = c.dbq.UpdateRefreshToken(r.Context(), rtoken)
+	if err != nil {
+		responseWithError(w, http.StatusUnauthorized, err)
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+
+
 func main() {
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
@@ -410,9 +491,13 @@ func main() {
 
 	srv.HandleFunc("POST /api/users", cfg.createUser)
 	srv.HandleFunc("POST /api/login", cfg.login)
+	srv.HandleFunc("POST /api/refresh", cfg.refresh)
+	srv.HandleFunc("POST /api/revoke", cfg.revoke)
 
 	srv.HandleFunc("GET /admin/metrics", cfg.getHits)
 	srv.HandleFunc("POST /admin/reset", cfg.reset)
+
+
 	srv.Handle("/app/", cfg.middlewareMetricsInc(http.StripPrefix("/app", 
 		http.FileServer(http.Dir(".")))))
 
