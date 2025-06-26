@@ -16,6 +16,7 @@ import (
 	"time"
 	"github.com/google/uuid"
 	"github.com/trolioSFG/go-server/internal/auth"
+	"strconv"
 )
 
 
@@ -23,6 +24,7 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	dbq *database.Queries
 	platform string
+	secret string
 }
 
 type jChirp struct {
@@ -87,6 +89,21 @@ func (c *apiConfig) reset(w http.ResponseWriter, req *http.Request) {
 }
 
 func (c *apiConfig) createChirp(w http.ResponseWriter, req *http.Request) {
+	token, err := auth.GetBearerToken(req.Header)
+	if err != nil {
+		responseWithError(w, http.StatusUnauthorized, err)
+		return
+	}
+
+	fmt.Println("Received token:", token)
+
+	id, err := auth.ValidateJWT(token, c.secret)
+	if err != nil {
+		responseWithError(w, http.StatusUnauthorized, err)
+		return
+	}
+	fmt.Println("CreateChirp JWT userID:", id)
+
 	type Petition struct {
 		Body string `json:"body"`
 		UserID uuid.UUID `json:"user_id"`
@@ -95,7 +112,7 @@ func (c *apiConfig) createChirp(w http.ResponseWriter, req *http.Request) {
 	pet := Petition{}
 
 	decoder := json.NewDecoder(req.Body)
-	err := decoder.Decode(&pet)
+	err = decoder.Decode(&pet)
 	if err != nil {
 		w.Header().Add("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
@@ -123,10 +140,12 @@ func (c *apiConfig) createChirp(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
+	// Use userID from JWT instead of petition
+	// UserID: pet.UserID,
 	clean = strings.TrimSpace(clean)
 	chirp := database.CreateChirpParams {
 		Body: clean,
-		UserID: pet.UserID,
+		UserID: id,
 	}
 
 	created, err := c.dbq.CreateChirp(req.Context(), chirp)
@@ -240,12 +259,17 @@ func (c *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 	type userReq struct {
 		Email string `json:"email"`
 		Password string `json:"password"`
+		ExpiresInSeconds int `json:"expires_in_seconds"`
 	}
+
 	data := userReq{}
 	err := decoder.Decode(&data)
 	if err != nil {
 		responseWithError(w, http.StatusBadRequest, err)
 		return
+	}
+	if data.ExpiresInSeconds == 0 || data.ExpiresInSeconds > 3600 {
+		data.ExpiresInSeconds = 3600
 	}
 
 	dbUser, err := c.dbq.GetUserByEmail(r.Context(), data.Email)
@@ -260,10 +284,22 @@ func (c *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	duration, err := time.ParseDuration(strconv.Itoa(data.ExpiresInSeconds) + "s")
+	if err != nil {
+		responseWithError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	token, err := auth.MakeJWT(dbUser.ID, c.secret, duration)
+	if err != nil {
+		responseWithError(w, http.StatusInternalServerError, err)
+		return
+	}
+
 	w.Header().Add("Contenty-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(fmt.Sprintf(`{"id":"%v","created_at":"%v","updated_at":"%v","email":"%v"}`,
-		dbUser.ID, dbUser.CreatedAt, dbUser.UpdatedAt, dbUser.Email)))
+	w.Write([]byte(fmt.Sprintf(`{"id":"%v","created_at":"%v","updated_at":"%v","email":"%v","token":"%v"}`,
+		dbUser.ID, dbUser.CreatedAt, dbUser.UpdatedAt, dbUser.Email, token)))
 }
 
 
@@ -349,6 +385,7 @@ func (c *apiConfig) getChirp(w http.ResponseWriter, r *http.Request) {
 func main() {
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
+	secret := os.Getenv("SECRET")
 	platform := os.Getenv("PLATFORM")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
@@ -361,6 +398,7 @@ func main() {
 		fileserverHits: atomic.Int32{},
 		dbq: dbQueries,
 		platform: platform,
+		secret: secret,
 	}
 	cfg.fileserverHits.Store(0)
 
