@@ -235,12 +235,14 @@ func (c *apiConfig) createUser(w http.ResponseWriter, req *http.Request) {
 		CreatedAt time.Time `json:"created_at"`
 		UpdatedAt time.Time `json:"updated_at"`
 		Email string `json:"email"`
+		IsChirpyRed bool `json:"is_chirpy_red"`
 	}
 	uc := udata {
 		ID: user.ID,
 		CreatedAt: user.CreatedAt,
 		UpdatedAt: user.UpdatedAt,
 		Email: user.Email,
+		IsChirpyRed: user.IsChirpyRed,
 	}
 
 	body, err := json.Marshal(&uc)
@@ -360,8 +362,8 @@ func (c *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Contenty-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(fmt.Sprintf(
-		`{"id":"%v","created_at":"%v","updated_at":"%v","email":"%v","token":"%v","refresh_token":"%v"}`,
-		dbUser.ID, dbUser.CreatedAt, dbUser.UpdatedAt, dbUser.Email, token, refToken)))
+		`{"id":"%v","created_at":"%v","updated_at":"%v","email":"%v","token":"%v","refresh_token":"%v","is_chirpy_red":%v}`,
+		dbUser.ID, dbUser.CreatedAt, dbUser.UpdatedAt, dbUser.Email, token, refToken, dbUser.IsChirpyRed)))
 }
 
 
@@ -554,6 +556,38 @@ func (c *apiConfig) revoke(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (c *apiConfig) upgradeUser(w http.ResponseWriter, r *http.Request) {
+
+	webhook := struct {
+		Event string `json:"event"`
+		Data struct {
+			UserID uuid.UUID `json:"user_id"`
+		} `json:"data"`
+	}{}
+
+	decoder := json.NewDecoder(r.Body)
+	defer r.Body.Close()
+	err := decoder.Decode(&webhook)
+	if err != nil {
+		responseWithError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	if webhook.Event != "user.upgraded" {
+		// responseWithError(w, http.StatusNoContent, "Unrecognized even")
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	_, err = c.dbq.UpgradeUser(r.Context(), webhook.Data.UserID)
+	if err != nil {
+		responseWithError(w, http.StatusNotFound, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 
 
 func main() {
@@ -588,6 +622,8 @@ func main() {
 	srv.HandleFunc("POST /api/login", cfg.login)
 	srv.HandleFunc("POST /api/refresh", cfg.refresh)
 	srv.HandleFunc("POST /api/revoke", cfg.revoke)
+
+	srv.HandleFunc("POST /api/polka/webhooks", cfg.upgradeUser)
 
 	srv.HandleFunc("GET /admin/metrics", cfg.getHits)
 	srv.HandleFunc("POST /admin/reset", cfg.reset)
