@@ -377,13 +377,38 @@ func responseWithError(w http.ResponseWriter, code int, err error) {
 
 
 func (c *apiConfig) getChirps(w http.ResponseWriter, req *http.Request) {
-	jchirps := []jChirp{}
 
-	chirps, err := c.dbq.GetChirps(req.Context())
-	if err != nil {
-		responseWithError(w, http.StatusInternalServerError,err)
-		return
+	req.ParseForm()
+	authorID := ""
+	if values, ok := req.Form["author_id"]; ok {
+		authorID = values[0]
+		fmt.Println("Get chirps for AuthorID:", authorID)
 	}
+
+	chirps := []database.Chirp{}
+
+	if authorID == "" {
+		aux, err := c.dbq.GetChirps(req.Context())
+		if err != nil {
+			responseWithError(w, http.StatusInternalServerError,err)
+			return
+		}
+		chirps = aux
+	} else {
+		authorUUID, err := uuid.Parse(authorID)
+		if err != nil {
+			responseWithError(w, http.StatusInternalServerError, err)
+			return
+		}
+		aux, err := c.dbq.GetChirpsByAuthor(req.Context(), authorUUID)
+		if err != nil {
+			responseWithError(w, http.StatusInternalServerError, err)
+			return
+		}
+		chirps = aux
+	}
+
+	jchirps := []jChirp{}
 	for _, item := range chirps {
 		jchirps = append(jchirps, jChirp{
 			ID: item.ID,
