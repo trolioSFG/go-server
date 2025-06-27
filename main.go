@@ -25,6 +25,7 @@ type apiConfig struct {
 	dbq *database.Queries
 	platform string
 	secret string
+	polkaKey string
 }
 
 type jChirp struct {
@@ -557,6 +558,16 @@ func (c *apiConfig) revoke(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *apiConfig) upgradeUser(w http.ResponseWriter, r *http.Request) {
+	apiKey, err := auth.GetAPIKey(r.Header)
+	if err != nil {
+		responseWithError(w, http.StatusUnauthorized, err)
+		return
+	}
+
+	if apiKey != c.polkaKey {
+		responseWithError(w, http.StatusUnauthorized, fmt.Errorf("Invalid API Key"))
+		return
+	}
 
 	webhook := struct {
 		Event string `json:"event"`
@@ -567,7 +578,7 @@ func (c *apiConfig) upgradeUser(w http.ResponseWriter, r *http.Request) {
 
 	decoder := json.NewDecoder(r.Body)
 	defer r.Body.Close()
-	err := decoder.Decode(&webhook)
+	err = decoder.Decode(&webhook)
 	if err != nil {
 		responseWithError(w, http.StatusInternalServerError, err)
 		return
@@ -602,11 +613,13 @@ func main() {
 	}
 	dbQueries := database.New(db)
 
+	// TODO: Check if any value is not present in .env
 	cfg := apiConfig{
 		fileserverHits: atomic.Int32{},
 		dbq: dbQueries,
 		platform: platform,
 		secret: secret,
+		polkaKey: os.Getenv("POLKA_KEY"),
 	}
 	cfg.fileserverHits.Store(0)
 
