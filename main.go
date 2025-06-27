@@ -254,6 +254,52 @@ func (c *apiConfig) createUser(w http.ResponseWriter, req *http.Request) {
 	w.Write(body)
 }
 
+func (c *apiConfig) updateUser(w http.ResponseWriter, r *http.Request) {
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		responseWithError(w, http.StatusUnauthorized, err)
+		return
+	}
+
+	userID, err := auth.ValidateJWT(token, c.secret)
+	if err != nil {
+		responseWithError(w, http.StatusUnauthorized, err)
+		return
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	type userReq struct {
+		Email string `json:"email"`
+		Password string `json:"password"`
+	}
+	ur := userReq{}
+	err = decoder.Decode(&ur)
+	if err != nil {
+		responseWithError(w, http.StatusUnauthorized, err)
+	}
+	hashed, err := auth.HashPassword(ur.Password)
+	if err != nil {
+		responseWithError(w, http.StatusUnauthorized, err)
+	}
+
+	newUser, err := c.dbq.UpdateUser(r.Context(), database.UpdateUserParams{
+		ID: userID,
+		HashedPassword: hashed,
+		Email: ur.Email,
+	})
+	if err != nil {
+		responseWithError(w, http.StatusUnauthorized, err)
+		return
+	}
+
+	w.Header().Add("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(fmt.Sprintf(`{"id":"%v","email":"%v","created_at":"%v","updated_at":"%v"}`,
+		newUser.ID, newUser.Email, newUser.CreatedAt, newUser.UpdatedAt)))
+
+}
+
+
 func (c *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
 	type userReq struct {
@@ -490,6 +536,7 @@ func main() {
 	srv.HandleFunc("GET /api/chirps/{id}", cfg.getChirp)
 
 	srv.HandleFunc("POST /api/users", cfg.createUser)
+	srv.HandleFunc("PUT /api/users", cfg.updateUser)
 	srv.HandleFunc("POST /api/login", cfg.login)
 	srv.HandleFunc("POST /api/refresh", cfg.refresh)
 	srv.HandleFunc("POST /api/revoke", cfg.revoke)
