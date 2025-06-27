@@ -419,7 +419,7 @@ func (c *apiConfig) getChirp(w http.ResponseWriter, r *http.Request) {
 	chirp, err := c.dbq.GetChirpByID(r.Context(), chirpID)
 	if err != nil {
 		if strings.Contains(err.Error(), "no rows in result set") {
-			responseWithError(w, http.StatusNotFound, err)
+			responseWithError(w, http.StatusNotFound, fmt.Errorf("No chirp found"))
 		} else {
 			responseWithError(w, http.StatusInternalServerError, err)
 		}
@@ -443,6 +443,53 @@ func (c *apiConfig) getChirp(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write(data)
 }
+
+func (c *apiConfig) deleteChirp(w http.ResponseWriter, r *http.Request) {
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		responseWithError(w, http.StatusUnauthorized, err)
+		return
+	}
+
+	userIDToken, err := auth.ValidateJWT(token, c.secret)
+	if err != nil {
+		responseWithError(w, http.StatusUnauthorized, err)
+		return
+	}
+
+	id := r.PathValue("id")
+	chirpID, err := uuid.Parse(id)
+	if err != nil {
+		responseWithError(w, http.StatusForbidden, err)
+		return
+	}
+	
+	chirp, err := c.dbq.GetChirpByID(r.Context(), chirpID)
+	if err != nil {
+		if strings.Contains(err.Error(), "no rows in result set") {
+			responseWithError(w, http.StatusNotFound, fmt.Errorf("No chirp found"))
+		} else {
+			responseWithError(w, http.StatusNotFound, err)
+		}
+		return
+	}
+
+	if userIDToken != chirp.UserID {
+		responseWithError(w, http.StatusForbidden, fmt.Errorf("Forbidden"))
+		return
+	}
+
+	err = c.dbq.DeleteChirp(r.Context(), chirpID)
+	if err != nil {
+		fmt.Println("Chirp not found at delete")
+		responseWithError(w, http.StatusNotFound, err)
+		return
+	}
+
+	w.Header().Add("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNoContent)
+}
+
 
 func (c *apiConfig) refresh(w http.ResponseWriter, r *http.Request) {
 	rtoken, err := auth.GetBearerToken(r.Header)
@@ -534,6 +581,7 @@ func main() {
 	srv.HandleFunc("POST /api/chirps", cfg.createChirp)
 	srv.HandleFunc("GET /api/chirps", cfg.getChirps)
 	srv.HandleFunc("GET /api/chirps/{id}", cfg.getChirp)
+	srv.HandleFunc("DELETE /api/chirps/{id}", cfg.deleteChirp)
 
 	srv.HandleFunc("POST /api/users", cfg.createUser)
 	srv.HandleFunc("PUT /api/users", cfg.updateUser)
