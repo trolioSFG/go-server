@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/trolioSFG/go-server/internal/auth"
 //	"strconv"
+	"sort"
 )
 
 
@@ -380,9 +381,17 @@ func (c *apiConfig) getChirps(w http.ResponseWriter, req *http.Request) {
 
 	req.ParseForm()
 	authorID := ""
+	sortOrder := "asc"
+
 	if values, ok := req.Form["author_id"]; ok {
 		authorID = values[0]
 		fmt.Println("Get chirps for AuthorID:", authorID)
+	}
+
+	if values, ok := req.Form["sort"]; ok {
+		if values[0] == "desc" {
+			sortOrder = "desc"
+		}
 	}
 
 	chirps := []database.Chirp{}
@@ -407,6 +416,13 @@ func (c *apiConfig) getChirps(w http.ResponseWriter, req *http.Request) {
 		}
 		chirps = aux
 	}
+
+	if sortOrder == "desc" {
+		sort.Slice(chirps, func(i, j int) bool {
+			return chirps[i].CreatedAt.After(chirps[j].CreatedAt)
+		})
+	}
+
 
 	jchirps := []jChirp{}
 	for _, item := range chirps {
